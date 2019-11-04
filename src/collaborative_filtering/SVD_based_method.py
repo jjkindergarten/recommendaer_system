@@ -1,6 +1,8 @@
 import numpy as np
 from src.utilits.share import cosine_similarity
 import pandas as pd
+import warnings
+from numpy.random import randint, normal
 
 def _svd(a, preservation):
     """
@@ -50,7 +52,7 @@ def k_neighbor_svd(target_index, k, char_m, s_matrix):
 
     return list(temp['index'])
 
-def N_top_recommender_svd(a, neigbor, num, if_user = True, method = 'freq'):
+def N_top_recommender_svd(a, neigbor, num, if_user = True):
     """
     return the recommend item
     :param a: the original user by item matrix
@@ -58,8 +60,137 @@ def N_top_recommender_svd(a, neigbor, num, if_user = True, method = 'freq'):
     :param num: how many
     :param if_user: if the neigbor refers to user, then true. if item, then false
     :param method: param only works when if_user = True, two options: 'freq' refers to count the top
-    :return:
+    :return: return the index of name of recommendation
     """
+
+
+    if if_user:
+        neigbor_user = a.iloc[neigbor,:]
+        song_ranking = neigbor_user.mean(axis = 0)
+        song_ranking.sort_values(ascending=False, inplace = True)
+        return song_ranking.index[:num]
+    else:
+        # For item, it would return the cloest neigbor directly.
+        # The k-cloest neigbor should be consistent with N-recommendation in this case.
+        return list(a.columns)[neigbor]
+
+def insert_new_user(new_user, user_char_mat, s):
+    """
+    insert new user into the user characteristic matrix
+    :param new_user: 1 by m vecotr, where m denotes the number of item
+    :param user_char_mat: the original user characteristic matrix (m by k)
+    :param s: k by k diagonal matrix
+    :return: new user characteristic matrix with new user vector inserted at the end
+    """
+
+    new_user_v = new_user @ user_char_mat @ np.linalg.inv(s)
+    return np.vstack((user_char_mat, new_user_v))
+
+
+def cf_baseline(a, reg, step_size, max_iter, tol, check_point = None):
+    """
+    a baseline method for collborative filtering
+    approx rating b_{ui} is given by b_{ui} = \mu + b_u + b_i
+    true rating r_{ui} \aaprox b_{ui}
+    try to get estimation of b_u and b_i by solving the least squares problem:
+    min \sum (r_{ui} - \mu - b_u - b_i)^2 + \lambda_1 (\sum b_u^2 + \sum b_i^2)
+    solve it by stochastic gradient
+    b_u <- b_u + \gamma (r_{ui} - b_{ui} - \lambda_4 b_u)
+    b_i <- b_i + \gamma (r_{ui} - b_{ui} - \lambda_4 b_i)
+    :param a: the user-item matrix
+    :param reg: parameter for regularization
+    :param step_size: parameter for SGD
+    :param max_iter: max epoch
+    :return: b_u, b_i
+    """
+    # generate random variable
+    random_index = [[i, j] for i in randint(a.shape[0], size=max_iter) for j in randint(a.shape[1], size=max_iter)]
+
+    b_u = [0] * a.shape[0]
+    b_i = [0] * a.shape[1]
+
+    mu = np.mean(a)
+    b = np.ones(a.shape) * mu
+
+    error_mat = a - b
+
+    for i in range(max_iter):
+        m,n = random_index[i]
+        b_u += step_size * (error_mat[:,n] - reg * b_u)
+        b_i += step_size * (error_mat[m,:] - reg * b_i)
+
+        b = np.ones(a.shape) * mu
+        for x in range(len(b_u)):
+            b[x, :] =  b_u[x]
+        for y in range(len(b_i)):
+            b[:, y] = b_i[y]
+
+        error_mat = a - b
+
+        loss = (np.sum(error_mat ** 2)/(a.shape[0] * a.shape[1]))**0.5
+        if loss < tol:
+            return b_u, b_i
+
+    return b_u, b_i
+
+
+
+
+def svd_sgd(a, k, reg, step_size, max_iter, tol):
+    """
+    try to minimize the regularized square error:
+    min \sum(r_{ui} - \mu - b_i - b_u - q_i^Tp_u)^2 + \lambda_4(b_i^2 + b_u^2 + |q_i|^2 + |p_u|^2)
+    :param a: the user-item matrix
+    :param reg: parameter for regularization
+    :param step_size: parameter for SGD
+    :param max_iter: max epoch
+    :param tol: the early stopping criterion
+    :return: b_u, b_i, q p
+    """
+
+    # generate random variable
+    random_index = [[i, j] for i in randint(a.shape[0], size=max_iter) for j in randint(a.shape[1], size=max_iter)]
+
+    user_num = a.shape[0]
+    item_num = a.shape[1]
+
+    # generate initial q, p where each elemenet is normally distributed
+    q = normal(0, 1, size=(item_num, k))
+    p = normal(0, 1, size=(user_num, k))
+
+    b_u = [0] * a.shape[0]
+    b_i = [0] * a.shape[1]
+
+    mu = np.mean(a)
+    b = np.ones(a.shape) * mu +  p @ q.T
+
+    for i in range(max_iter):
+        m, n = random_index[i]
+        b_u[m] += step_size * (error_mat[m, n] - reg * b_u[m])
+        b_i[n] += step_size * (error_mat[m, n] - reg * b_i[n])
+        q[n,:] += step_size * (error_mat[m, n]*p[m,:] - reg*q[n,:])
+        p[m,:] += step_size * (error_mat[m, n]*q[n,:] - reg*p[m,:])
+
+        # maybe issue
+        b[m, :] = [(mu + b_u[m])]*item_num + b_i + p @ q[n,:].reshape((k,1))
+        b[:, n] = [(mu + b_i[n])]*user_num + b_u + q @ p[m,:].reshape((k,1))
+        b[m, n] = mu + b_u[m] + b_i[n] + q[n,:] @ p[m,:]
+
+        error_mat = a - b
+
+        loss = (np.sum(error_mat ** 2) / (a.shape[0] * a.shape[1])) ** 0.5
+        if loss < tol:
+            return b_u, b_i
+
+    return b_u, b_i, q, p
+
+
+
+
+
+
+
+
 
 
 
