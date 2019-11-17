@@ -168,8 +168,9 @@ def svd_sgd(a, k, reg, step_size, max_iter, tol):
         m, n = random_index[i]
         b_u[m] += step_size * (error_mat[m, n] - reg * b_u[m])
         b_i[n] += step_size * (error_mat[m, n] - reg * b_i[n])
+        q_old = q[n,:]
         q[n,:] += step_size * (error_mat[m, n]*p[m,:] - reg*q[n,:])
-        p[m,:] += step_size * (error_mat[m, n]*q[n,:] - reg*p[m,:])
+        p[m,:] += step_size * (error_mat[m, n]*q_old - reg*p[m,:])
 
         # maybe issue
         b[m, :] = [(mu + b_u[m])]*item_num + b_i + p @ q[n,:].reshape((k,1))
@@ -183,6 +184,93 @@ def svd_sgd(a, k, reg, step_size, max_iter, tol):
             return b_u, b_i
 
     return b_u, b_i, q, p
+
+
+
+def svd_pp_sgd(a, k, reg, step_size, max_iter, tol):
+    """
+    try to minimize the regularized square error:
+    min \sum(r_{ui} - \mu - b_i - b_u - q_i^Tp_u)^2 + \lambda_4(b_i^2 + b_u^2 + |q_i|^2 + |p_u|^2)
+    :param a: the user-item matrix
+    :param reg: parameter for regularization
+    :param step_size: parameter for SGD
+    :param max_iter: max epoch
+    :param tol: the early stopping criterion
+    :return: b_u, b_i, q p
+    """
+
+    # generate random variable
+    random_index = [[i, j] for i in randint(a.shape[0], size=max_iter) for j in randint(a.shape[1], size=max_iter)]
+
+    user_num = a.shape[0]
+    item_num = a.shape[1]
+
+    # generate initial q, p where each elemenet is normally distributed
+    q = normal(0, 1, size=(item_num, k))
+    p = normal(0, 1, size=(user_num, k))
+
+    b_u = [0] * a.shape[0]
+    b_i = [0] * a.shape[1]
+
+    y_i = normal(0, 1, size=(item_num, k))
+
+    mu = np.mean(a)
+    b = np.ones(a.shape) * mu +  p @ q.T
+
+    for i in range(max_iter):
+        m, n = random_index[i]
+        b_u[m] += step_size * (error_mat[m, n] - reg * b_u[m])
+        b_i[n] += step_size * (error_mat[m, n] - reg * b_i[n])
+        q_old = q[n,:]
+        r_m = list(a[m,:])
+        r_m = [(i>0)*1 for i in r_m ]
+        y_i_m = np.array(r_m) @ y_i
+        q[n,:] += step_size * (error_mat[m, n]*(p[m,:]+sum(r_m)**(-0.5)*np.sum(y_i_m, axis=0)) - reg*q[n,:])
+        p[m,:] += step_size * (error_mat[m, n]*q_old - reg*p[m,:])
+        for j in range(item_num):
+            if r_m[j] != 0:
+                y_i[j,:] += step_size * (error_mat[m, n]*sum(r_m)**(-0.5)*q[n,:] - reg*y_i[j,:])
+
+        # in svd ++, have to update the whole matrix
+        for mat_i in b.shape[0]:
+            r_m = list(a[mat_i, :])
+            r_m = [(i > 0) * 1 for i in r_m]
+            y_i_m = np.array(r_m) @ y_i
+            for mat_j in b.shape[1]:
+                b[mat_i, mat_j] = mu + b_i[mat_j] + b_u[mat_i] \
+                                  + q[mat_j,:] @ (p[mat_i,:] + r_m**(-0.5)*np.sum(y_i_m, axis=0))
+
+
+        error_mat = a - b
+
+        loss = (np.sum(error_mat ** 2) / (a.shape[0] * a.shape[1])) ** 0.5
+        if loss < tol:
+            return b_u, b_i
+
+    return b_u, b_i, q, p
+
+
+if __name__ == "__main__":
+    from surprise import SVD
+    from src.data.load_data import load_movielens_100k
+    from src.collaborative_filtering.SVD_surprise import svd_predict
+    from src.utilits.share import mse, mae
+    from src.data.load_data import load_popular_sub_data
+
+    data, data_train, data_test = load_movielens_100k()
+
+    # surprise svd
+    algo = SVD()
+    algo.fit(data_train)
+    test_pred = svd_predict(algo, data_test)
+    print("RMSE:\t\t{}".format(mse(data_test, test_pred)),
+          "MAE:\t\t{}".format(mae(data_test, test_pred)), sep='\n')
+
+    # self code recommender
+    core_data = load_popular_sub_data(data, 100, 100)
+
+
+
 
 
 
