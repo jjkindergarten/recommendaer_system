@@ -32,6 +32,7 @@ def k_neighbor_svd(target_index, k, char_m, s_matrix):
     :param target_index: a number smaller than n (user) or m (item)
     :param k: number of neigbor
     :param char_m: the characteristic matrix
+    :param s_matrix: the characteristic matrix
     :return: a list contains all user\itme index
     """
 
@@ -68,7 +69,7 @@ def N_top_recommender_svd(a, neigbor, num, if_user = True):
         neigbor_user = a.iloc[neigbor,:]
         song_ranking = neigbor_user.mean(axis = 0)
         song_ranking.sort_values(ascending=False, inplace = True)
-        return song_ranking.index[:num]
+        return list(song_ranking.index[:num])
     else:
         # For item, it would return the cloest neigbor directly.
         # The k-cloest neigbor should be consistent with N-recommendation in this case.
@@ -86,8 +87,7 @@ def insert_new_user(new_user, user_char_mat, s):
     new_user_v = new_user @ user_char_mat @ np.linalg.inv(s)
     return np.vstack((user_char_mat, new_user_v))
 
-
-def cf_baseline(a, reg, step_size, max_iter, tol, check_point = None):
+def cf_baseline(a, reg, step_size, max_iter, tol):
     """
     a baseline method for collborative filtering
     approx rating b_{ui} is given by b_{ui} = \mu + b_u + b_i
@@ -97,7 +97,7 @@ def cf_baseline(a, reg, step_size, max_iter, tol, check_point = None):
     solve it by stochastic gradient
     b_u <- b_u + \gamma (r_{ui} - b_{ui} - \lambda_4 b_u)
     b_i <- b_i + \gamma (r_{ui} - b_{ui} - \lambda_4 b_i)
-    :param a: the user-item matrix
+    :param a: the user-item matrix (compressed one)
     :param reg: parameter for regularization
     :param step_size: parameter for SGD
     :param max_iter: max epoch
@@ -109,7 +109,7 @@ def cf_baseline(a, reg, step_size, max_iter, tol, check_point = None):
     b_u = [0] * a.shape[0]
     b_i = [0] * a.shape[1]
 
-    mu = np.mean(a)
+    mu = np.mean(np.mean(a))
     b = np.ones(a.shape) * mu
 
     error_mat = a - b
@@ -134,13 +134,12 @@ def cf_baseline(a, reg, step_size, max_iter, tol, check_point = None):
     return b_u, b_i
 
 
-
-
 def svd_sgd(a, k, reg, step_size, max_iter, tol):
     """
     try to minimize the regularized square error:
     min \sum(r_{ui} - \mu - b_i - b_u - q_i^Tp_u)^2 + \lambda_4(b_i^2 + b_u^2 + |q_i|^2 + |p_u|^2)
     :param a: the user-item matrix
+    :param k: characteristic matrix's feature num
     :param reg: parameter for regularization
     :param step_size: parameter for SGD
     :param max_iter: max epoch
@@ -251,23 +250,49 @@ def svd_pp_sgd(a, k, reg, step_size, max_iter, tol):
 
 
 if __name__ == "__main__":
-    from surprise import SVD
-    from src.data.load_data import load_movielens_100k
+    from surprise import SVD, BaselineOnly
+    from src.data.load_data import load_movielens_100k, transfer_user_item_mat
     from src.collaborative_filtering.SVD_surprise import svd_predict
     from src.utilits.share import mse, mae
-    from src.data.load_data import load_popular_sub_data
+    from src.data.load_data import load_popular_sub_data, data_split
 
-    data, data_train, data_test = load_movielens_100k()
+    data, data_train, data_test, data_train_db = load_movielens_100k()
 
     # surprise svd
     algo = SVD()
     algo.fit(data_train)
-    test_pred = svd_predict(algo, data_test)
-    print("RMSE:\t\t{}".format(mse(data_test, test_pred)),
-          "MAE:\t\t{}".format(mae(data_test, test_pred)), sep='\n')
+    test_pred_SVD = svd_predict(algo, data_test)
+    print("RMSE:\t\t{}".format(mse(data_test, test_pred_SVD)),
+          "MAE:\t\t{}".format(mae(data_test, test_pred_SVD)), sep='\n')
 
-    # self code recommender
-    core_data = load_popular_sub_data(data, 100, 100)
+    ################# self code recommender ########################
+    core_data, freq_user, freq_item = load_popular_sub_data(data, 100, 100)
+    test_data = data[data.user.isin(list(core_data.index))]
+    test_item = [i for i in data.movie if i not in list(core_data.columns)]
+    test_data = data[data.movie.isin(test_item)]
+    test_data = load_popular_sub_data(test_data, 100, 100)
+    user_mat, item_mat, singular_mat = _svd(core_data, 10)
+
+    # check user similarity
+    close_neibor_index = k_neighbor_svd(1, 10, user_mat, singular_mat)
+    close_neibor = list(core_data.index[close_neibor_index])
+    print('close niegbor of {} is: {}'.format(core_data.index[1], close_neibor))
+
+    recom_item = N_top_recommender_svd(test_data, close_neibor_index, 10, if_user=True)
+    user = core_data.index[1]
+    test_data.loc[user, recom_item]
+
+    ############## self code SGD svd ##################
+    # try surprise baseline first
+    base_algo = BaselineOnly()
+    base_algo.fit(data_train)
+    test_pred_base = svd_predict(base_algo, data_test)
+    print("RMSE:\t\t{}".format(mse(data_test, test_pred_base)),
+          "MAE:\t\t{}".format(mae(data_test, test_pred_base)), sep='\n')
+
+    # self code baseline
+    data_train_ui_db = transfer_user_item_mat(data_train_db)
+    cf_baseline(data_train, reg=0.01, step_size = 0.005, max_iter = 100, tol = 1e-4)
 
 
 

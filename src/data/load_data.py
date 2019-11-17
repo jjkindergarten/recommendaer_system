@@ -22,11 +22,11 @@ def load_movielens_100k():
     rows = len(data)
     data = data.iloc[np.random.permutation(rows)].reset_index(drop=True)
     split_index = int(rows * split_ratio)
-    data_train = data[:split_index]
+    data_train_db = data[:split_index]
     data_test = data[split_index:].reset_index(drop=True)
 
-    data_train = surprise.Dataset.load_from_df(data_train, reader=surprise.Reader('ml-100k')).build_full_trainset()
-    return data, data_train, data_test
+    data_train = surprise.Dataset.load_from_df(data_train_db, reader=surprise.Reader('ml-100k')).build_full_trainset()
+    return data, data_train, data_test, data_train_db
 
 # most popular item and most freq use user
 def load_popular_sub_data(data, n_user, n_item):
@@ -49,7 +49,8 @@ def load_popular_sub_data(data, n_user, n_item):
     for i in range(len(data)):
         user_item_mat.loc[data['user'][i], data['movie'][i]] = data['rating'][i]
 
-    return user_item_mat
+    return user_item_mat, freq_user, freq_item
+
 
 def data_split(data, corrupt_ratio = 0.1):
     """
@@ -58,11 +59,38 @@ def data_split(data, corrupt_ratio = 0.1):
     :param corrupter_ratio:
     :return:
     """
-    test_data = pd.DataFrame(columns=['user', 'item', 'rating'])
+    test_data = pd.DataFrame()
     for i in data.index:
-        temp = data.iloc[0,:]
+        temp = data.loc[i,:]
         temp_nonzero = temp.nonzero()[0]
-        select_index = np.random.choice(temp_nonzero, len(temp)*corrupt_ratio)
+        select_index = list(np.random.choice(temp_nonzero, int(len(temp)*corrupt_ratio)))
+        item_list = list(data.columns[select_index])
+
+        corrupt_temp = [[i, item, data.loc[i,item]] for item in item_list]
+        test_data = test_data.append(corrupt_temp)
+
+        data.loc[i, item_list] = 0
+
+    test_data.columns = ['user', 'item', 'rating']
+
+    return data, test_data
+
+
+def transfer_user_item_mat(data):
+    """
+
+    :param data:
+    :return:
+    """
+
+    user_item_mat = pd.DataFrame(0, index=data.user, columns=data.movie)
+    for i in range(len(data)):
+        user_item_mat.loc[data['user'][i], data['movie'][i]] = data['rating'][i]
+
+    return user_item_mat
+
+
+
 
 
 
