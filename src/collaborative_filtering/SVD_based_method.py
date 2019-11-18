@@ -4,6 +4,7 @@ import pandas as pd
 import warnings
 from random import shuffle
 from numpy.random import randint, normal, choice
+from src.utilits.share import generate_error_matrix
 
 def _svd(a, preservation):
     """
@@ -105,40 +106,39 @@ def cf_baseline(a, reg, step_size, max_iter, tol):
     :return: b_u, b_i
     """
     # generate random variable
+    user_list = list(a.index)
+    item_list = list(a.columns)
     a = a.values
-    random_index_u = [i for i in randint(a.shape[0], size=max_iter)]
-    random_index_i = [j for j in randint(a.shape[1], size=max_iter)]
-    random_index = [[random_index_u[i], random_index_i[i]] for i in range(max_iter)]
+    index_u, index_i = a.nonzero()
+    nonzero_index = [[index_u[i], index_i[i]] for i in range(len(index_u))]
+    random_index = [nonzero_index[i] for i in choice(range(len(nonzero_index)), max_iter, replace = True)]
 
+    b_u = np.zeros(a.shape[0])
+    b_i = np.zeros(a.shape[1])
 
-    b_u = np.array([0] * a.shape[0])
-    b_i = np.array([0] * a.shape[1])
-
-    mu = np.mean(np.mean(a))
+    mu = np.sum(a)/len(np.nonzero(a)[0])
     b = np.ones(a.shape) * mu
-
-    error_mat = a - b
 
     for i in range(max_iter):
         m, n = random_index[i]
-        b_u = b_u + step_size * (error_mat[:, n] - reg * b_u)
-        b_i = b_i + step_size * (error_mat[m, :] - reg * b_i)
+        error = a[m,n] - b[m,n]
+        pre_b_u_m = b_u[m]
+        pre_b_i_n = b_i[n]
+        b_u[m] = b_u[m] + step_size * (error - reg * b_u[m])
+        b_i[n] = b_i[n] + step_size * (error - reg * b_i[n])
 
-        b = np.ones(a.shape) * mu
-        for x in range(len(b_u)):
-            b[x, :] = b[x, :] + b_u[x]
-        for y in range(len(b_i)):
-            b[:, y] = b[:, y] + b_i[y]
-
-        error_mat = a - b
+        b[m, :] = b[m, :] - pre_b_u_m + b_u[m]
+        b[:, n] = b[:, n] - pre_b_i_n + b_i[n]
 
         if i % 100 == 0:
-            loss = (np.sum(error_mat ** 2) / (a.shape[0] * a.shape[1])) ** 0.5
+            error_mat = generate_error_matrix(a, b)
+            loss = np.linalg.norm(error_mat,2)/(len(error_mat) ** 0.5)
             print('loss is {}'.format(loss))
-        if loss < tol:
-            return b_u, b_i
 
-    return b_u, b_i
+    b_u = pd.DataFrame(b_u, index = user_list, columns=['user_sd'])
+    b_i = pd.DataFrame(b_i, index = item_list, columns=['item_sd'])
+
+    return mu, b_u, b_i, b
 
 def svd_sgd(a, k, reg, step_size, max_iter, tol):
     """
@@ -154,7 +154,12 @@ def svd_sgd(a, k, reg, step_size, max_iter, tol):
     """
 
     # generate random variable
-    random_index = [[i, j] for i in randint(a.shape[0], size=max_iter) for j in randint(a.shape[1], size=max_iter)]
+    user_list = list(a.index)
+    item_list = list(a.columns)
+    a = a.values
+    index_u, index_i = a.nonzero()
+    nonzero_index = [[index_u[i], index_i[i]] for i in range(len(index_u))]
+    random_index = [nonzero_index[i] for i in choice(range(len(nonzero_index)), max_iter, replace = True)]
 
     user_num = a.shape[0]
     item_num = a.shape[1]
@@ -163,108 +168,104 @@ def svd_sgd(a, k, reg, step_size, max_iter, tol):
     q = normal(0, 1, size=(item_num, k))
     p = normal(0, 1, size=(user_num, k))
 
-    b_u = [0] * a.shape[0]
-    b_i = [0] * a.shape[1]
+    b_u = np.zeros(a.shape[0])
+    b_i = np.zeros(a.shape[1])
 
-    mu = np.mean(a)
+    mu = np.sum(a)/len(np.nonzero(a)[0])
     b = np.ones(a.shape) * mu +  p @ q.T
 
     for i in range(max_iter):
         m, n = random_index[i]
-        b_u[m] += step_size * (error_mat[m, n] - reg * b_u[m])
-        b_i[n] += step_size * (error_mat[m, n] - reg * b_i[n])
-        q_old = q[n,:]
-        q[n,:] += step_size * (error_mat[m, n]*p[m,:] - reg*q[n,:])
-        p[m,:] += step_size * (error_mat[m, n]*q_old - reg*p[m,:])
+        error = a[m,n] - b[m,n]
+
+        pre_b_u_m = b_u[m]
+        pre_b_i_n = b_i[n]
+        pre_q = q.copy()
+        pre_p = p.copy()
+
+        b_u[m] += step_size * (error - reg * b_u[m])
+        b_i[n] += step_size * (error - reg * b_i[n])
+        q[n,:] = q[n,:] + step_size * (error*p[m,:] - reg*q[n,:])
+        p[m,:] = p[m,:] + step_size * (error*pre_q[n,:] - reg*p[m,:])
 
         # maybe issue
-        b[m, :] = [(mu + b_u[m])]*item_num + b_i + p @ q[n,:].reshape((k,1))
-        b[:, n] = [(mu + b_i[n])]*user_num + b_u + q @ p[m,:].reshape((k,1))
-        b[m, n] = mu + b_u[m] + b_i[n] + q[n,:] @ p[m,:]
+        b[m, :] += -pre_b_u_m + b_u[m]
+        b[:, n] += -pre_b_i_n + b_i[n]
+        b[:, n] += -pre_p @ pre_q[n,:] + p @ q[n,:]
+        b[m, :] += -pre_q @ pre_p[m,:] + q @ p[m,:]
 
-        error_mat = a - b
+        if i % 100 == 0:
+            error_mat = generate_error_matrix(a, b)
+            loss = np.linalg.norm(error_mat,2)/(len(error_mat) ** 0.5)
+            print('loss is {}'.format(loss))
 
-        loss = (np.sum(error_mat ** 2) / (a.shape[0] * a.shape[1])) ** 0.5
-        if loss < tol:
-            return b_u, b_i
+    b_u = pd.DataFrame(b_u, index = user_list, columns=['user_sd'])
+    b_i = pd.DataFrame(b_i, index = item_list, columns=['item_sd'])
+    q = pd.DataFrame(q, index = item_list)
+    p = pd.DataFrame(p, index = user_list)
 
-    return b_u, b_i, q, p
+    return mu, b_u, b_i, q, p
 
 
-
-def svd_pp_sgd(a, k, reg, step_size, max_iter, tol):
-    """
-    try to minimize the regularized square error:
-    min \sum(r_{ui} - \mu - b_i - b_u - q_i^Tp_u)^2 + \lambda_4(b_i^2 + b_u^2 + |q_i|^2 + |p_u|^2)
-    :param a: the user-item matrix
-    :param reg: parameter for regularization
-    :param step_size: parameter for SGD
-    :param max_iter: max epoch
-    :param tol: the early stopping criterion
-    :return: b_u, b_i, q p
+def baseline_predict(data, mu, b_u, b_i):
     """
 
-    # generate random variable
-    random_index = [[i, j] for i in randint(a.shape[0], size=max_iter) for j in randint(a.shape[1], size=max_iter)]
+    :param data:
+    :param mu:
+    :param b_u:
+    :param b_i:
+    :return:
+    """
+    user_list = list(b_u.index)
+    item_list = list(b_i.index)
+    data = data[data.user.isin(user_list)]
+    data = data[data.movie.isin(item_list)]
 
-    user_num = a.shape[0]
-    item_num = a.shape[1]
+    data_pred = data.copy()
+    data_pred['rating'] = 0
+    for i in range(len(data)):
+        user = data_pred['user'][i]
+        item = data_pred['movie'][i]
 
-    # generate initial q, p where each elemenet is normally distributed
-    q = normal(0, 1, size=(item_num, k))
-    p = normal(0, 1, size=(user_num, k))
-
-    b_u = [0] * a.shape[0]
-    b_i = [0] * a.shape[1]
-
-    y_i = normal(0, 1, size=(item_num, k))
-
-    mu = np.mean(a)
-    b = np.ones(a.shape) * mu +  p @ q.T
-
-    for i in range(max_iter):
-        m, n = random_index[i]
-        b_u[m] += step_size * (error_mat[m, n] - reg * b_u[m])
-        b_i[n] += step_size * (error_mat[m, n] - reg * b_i[n])
-        q_old = q[n,:]
-        r_m = list(a[m,:])
-        r_m = [(i>0)*1 for i in r_m ]
-        y_i_m = np.array(r_m) @ y_i
-        q[n,:] += step_size * (error_mat[m, n]*(p[m,:]+sum(r_m)**(-0.5)*np.sum(y_i_m, axis=0)) - reg*q[n,:])
-        p[m,:] += step_size * (error_mat[m, n]*q_old - reg*p[m,:])
-        for j in range(item_num):
-            if r_m[j] != 0:
-                y_i[j,:] += step_size * (error_mat[m, n]*sum(r_m)**(-0.5)*q[n,:] - reg*y_i[j,:])
-
-        # in svd ++, have to update the whole matrix
-        for mat_i in b.shape[0]:
-            r_m = list(a[mat_i, :])
-            r_m = [(i > 0) * 1 for i in r_m]
-            y_i_m = np.array(r_m) @ y_i
-            for mat_j in b.shape[1]:
-                b[mat_i, mat_j] = mu + b_i[mat_j] + b_u[mat_i] \
-                                  + q[mat_j,:] @ (p[mat_i,:] + r_m**(-0.5)*np.sum(y_i_m, axis=0))
+        data_pred.loc[i, 'rating'] = mu + b_u.loc[user, 'user_sd'] + b_i.loc[item, 'item_sd']
+    return data_pred
 
 
-        error_mat = a - b
+def svd_predict(data, mu, b_u, b_i, q, p):
+    """
 
-        loss = (np.sum(error_mat ** 2) / (a.shape[0] * a.shape[1])) ** 0.5
-        if loss < tol:
-            return b_u, b_i
+    :param data:
+    :param mu:
+    :param b_u:
+    :param b_i:
+    :return:
+    """
+    user_list = list(b_u.index)
+    item_list = list(b_i.index)
+    data = data[data.user.isin(user_list)]
+    data = data[data.movie.isin(item_list)]
 
-    return b_u, b_i, q, p
+    data_pred = data.copy()
+    data_pred['rating'] = 0
+    for i in range(len(data)):
+        user = data_pred['user'][i]
+        item = data_pred['movie'][i]
+
+        data_pred.loc[i, 'rating'] = mu + b_u.loc[user, 'user_sd'] + b_i.loc[item, 'item_sd'] + p.loc[user,:] @ q.loc[item,:]
+    return data_pred
+
 
 
 if __name__ == "__main__":
     from surprise import SVD, BaselineOnly, Dataset, Reader
     from src.data.load_data import load_movielens_100k, transfer_user_item_mat
-    from src.collaborative_filtering.SVD_surprise import svd_predict
+    from src.collaborative_filtering.SVD_surprise import surprise_predict
     from src.utilits.share import mse, mae
     from src.data.load_data import load_popular_sub_data, data_split
 
     data, _, _ = load_movielens_100k()
 
-    core_data, train_data_ui, data_train, data_test = load_popular_sub_data(data, 100, 100, 0.75)
+    core_data, train_data_ui, data_train, data_test = load_popular_sub_data(data, 100, 200, 0.75)
     data_train_sp = Dataset.load_from_df(data_train, reader=Reader('ml-100k')).build_full_trainset()
 
     ################# self code recommender ########################
@@ -287,23 +288,29 @@ if __name__ == "__main__":
     # try surprise baseline first
     base_algo = BaselineOnly()
     base_algo.fit(data_train_sp)
-    test_pred_base = svd_predict(base_algo, data_test)
+    test_pred_base = surprise_predict(base_algo, data_test)
     print("RMSE:\t\t{}".format(mse(data_test, test_pred_base)),
           "MAE:\t\t{}".format(mae(data_test, test_pred_base)), sep='\n')
 
     # self code baseline
-    b_u, b_i = cf_baseline(train_data_ui, reg=0.001, step_size = 0.001, max_iter = 10000, tol = 1e-4)
+    mu, b_u, b_i, b = cf_baseline(train_data_ui, reg=0.004, step_size = 0.01, max_iter = 50000, tol = 1e-4)
+    data_test_base_pred = baseline_predict(data_test, mu, b_u, b_i)
+    print("RMSE:\t\t{}".format(mse(data_test, data_test_base_pred)),
+          "MAE:\t\t{}".format(mae(data_test, data_test_base_pred)), sep='\n')
+
 
     ############# self code svd ###################
     # surprise svd
     algo = SVD()
     algo.fit(data_train_sp)
-    test_pred_SVD = svd_predict(algo, data_test)
+    test_pred_SVD = surprise_predict(algo, data_test)
     print("RMSE:\t\t{}".format(mse(data_test, test_pred_SVD)),
           "MAE:\t\t{}".format(mae(data_test, test_pred_SVD)), sep='\n')
 
-
-
+    mu, b_u, b_i, q, p = svd_sgd(train_data_ui, k=5, reg=0.05, step_size=0.02, max_iter=200000, tol=1e-4)
+    data_test_svd_pred = svd_predict(data_test, mu, b_u, b_i, q, p)
+    print("RMSE:\t\t{}".format(mse(data_test, data_test_svd_pred)),
+          "MAE:\t\t{}".format(mae(data_test, data_test_svd_pred)), sep='\n')
 
 
 

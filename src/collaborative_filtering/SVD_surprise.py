@@ -1,7 +1,7 @@
 import surprise
 import pandas as pd
 
-def svd_predict(alg, data):
+def surprise_predict(alg, data):
     """
 
     :param alg: already trainning model

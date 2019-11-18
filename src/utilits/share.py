@@ -38,3 +38,19 @@ def mae(data, pred):
 
     return np.sqrt(mean_absolute_error(rating_true_pred['rating' + suffixes[0]], rating_true_pred['rating' + suffixes[1]]))
 
+def generate_error_matrix(a, b):
+    """
+
+    :param a:
+    :param b:
+    :return:
+    """
+    entry_diff = []
+    row_index_set, col_index_set = a_nonzero_index = np.nonzero(a)
+    for i in range(len(row_index_set)):
+        row_index = row_index_set[i]
+        col_index = col_index_set[i]
+
+        entry_diff.append(a[row_index, col_index] - b[row_index, col_index])
+
+    return np.array(entry_diff)
