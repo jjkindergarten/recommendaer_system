@@ -2,7 +2,8 @@ import numpy as np
 from src.utilits.share import cosine_similarity
 import pandas as pd
 import warnings
-from numpy.random import randint, normal
+from random import shuffle
+from numpy.random import randint, normal, choice
 
 def _svd(a, preservation):
     """
@@ -104,10 +105,14 @@ def cf_baseline(a, reg, step_size, max_iter, tol):
     :return: b_u, b_i
     """
     # generate random variable
-    random_index = [[i, j] for i in randint(a.shape[0], size=max_iter) for j in randint(a.shape[1], size=max_iter)]
+    a = a.values
+    random_index_u = [i for i in randint(a.shape[0], size=max_iter)]
+    random_index_i = [j for j in randint(a.shape[1], size=max_iter)]
+    random_index = [[random_index_u[i], random_index_i[i]] for i in range(max_iter)]
 
-    b_u = [0] * a.shape[0]
-    b_i = [0] * a.shape[1]
+
+    b_u = np.array([0] * a.shape[0])
+    b_i = np.array([0] * a.shape[1])
 
     mu = np.mean(np.mean(a))
     b = np.ones(a.shape) * mu
@@ -115,24 +120,25 @@ def cf_baseline(a, reg, step_size, max_iter, tol):
     error_mat = a - b
 
     for i in range(max_iter):
-        m,n = random_index[i]
-        b_u += step_size * (error_mat[:,n] - reg * b_u)
-        b_i += step_size * (error_mat[m,:] - reg * b_i)
+        m, n = random_index[i]
+        b_u = b_u + step_size * (error_mat[:, n] - reg * b_u)
+        b_i = b_i + step_size * (error_mat[m, :] - reg * b_i)
 
         b = np.ones(a.shape) * mu
         for x in range(len(b_u)):
-            b[x, :] =  b_u[x]
+            b[x, :] = b[x, :] + b_u[x]
         for y in range(len(b_i)):
-            b[:, y] = b_i[y]
+            b[:, y] = b[:, y] + b_i[y]
 
         error_mat = a - b
 
-        loss = (np.sum(error_mat ** 2)/(a.shape[0] * a.shape[1]))**0.5
+        if i % 100 == 0:
+            loss = (np.sum(error_mat ** 2) / (a.shape[0] * a.shape[1])) ** 0.5
+            print('loss is {}'.format(loss))
         if loss < tol:
             return b_u, b_i
 
     return b_u, b_i
-
 
 def svd_sgd(a, k, reg, step_size, max_iter, tol):
     """
@@ -250,49 +256,55 @@ def svd_pp_sgd(a, k, reg, step_size, max_iter, tol):
 
 
 if __name__ == "__main__":
-    from surprise import SVD, BaselineOnly
+    from surprise import SVD, BaselineOnly, Dataset, Reader
     from src.data.load_data import load_movielens_100k, transfer_user_item_mat
     from src.collaborative_filtering.SVD_surprise import svd_predict
     from src.utilits.share import mse, mae
     from src.data.load_data import load_popular_sub_data, data_split
 
-    data, data_train, data_test, data_train_db = load_movielens_100k()
+    data, _, _ = load_movielens_100k()
 
-    # surprise svd
-    algo = SVD()
-    algo.fit(data_train)
-    test_pred_SVD = svd_predict(algo, data_test)
-    print("RMSE:\t\t{}".format(mse(data_test, test_pred_SVD)),
-          "MAE:\t\t{}".format(mae(data_test, test_pred_SVD)), sep='\n')
+    core_data, train_data_ui, data_train, data_test = load_popular_sub_data(data, 100, 100, 0.75)
+    data_train_sp = Dataset.load_from_df(data_train, reader=Reader('ml-100k')).build_full_trainset()
 
     ################# self code recommender ########################
-    core_data, freq_user, freq_item = load_popular_sub_data(data, 100, 100)
     test_data = data[data.user.isin(list(core_data.index))]
     test_item = [i for i in data.movie if i not in list(core_data.columns)]
-    test_data = data[data.movie.isin(test_item)]
-    test_data = load_popular_sub_data(test_data, 100, 100)
-    user_mat, item_mat, singular_mat = _svd(core_data, 10)
+    test_data = test_data[test_data.movie.isin(test_item)]
+    _, test_data, _, _ = load_popular_sub_data(test_data, 100, 100)
+    user_mat, item_mat, singular_mat = _svd(train_data_ui, 10)
 
     # check user similarity
     close_neibor_index = k_neighbor_svd(1, 10, user_mat, singular_mat)
-    close_neibor = list(core_data.index[close_neibor_index])
+    close_neibor = list(train_data_ui.index[close_neibor_index])
     print('close niegbor of {} is: {}'.format(core_data.index[1], close_neibor))
 
     recom_item = N_top_recommender_svd(test_data, close_neibor_index, 10, if_user=True)
     user = core_data.index[1]
-    test_data.loc[user, recom_item]
+    data.loc[(data['user'] == user) & (data['movie'].isin(recom_item)), :]
 
-    ############## self code SGD svd ##################
+    ############## self code baseline ##################
     # try surprise baseline first
     base_algo = BaselineOnly()
-    base_algo.fit(data_train)
+    base_algo.fit(data_train_sp)
     test_pred_base = svd_predict(base_algo, data_test)
     print("RMSE:\t\t{}".format(mse(data_test, test_pred_base)),
           "MAE:\t\t{}".format(mae(data_test, test_pred_base)), sep='\n')
 
     # self code baseline
-    data_train_ui_db = transfer_user_item_mat(data_train_db)
-    cf_baseline(data_train, reg=0.01, step_size = 0.005, max_iter = 100, tol = 1e-4)
+    b_u, b_i = cf_baseline(train_data_ui, reg=0.001, step_size = 0.001, max_iter = 10000, tol = 1e-4)
+
+    ############# self code svd ###################
+    # surprise svd
+    algo = SVD()
+    algo.fit(data_train_sp)
+    test_pred_SVD = svd_predict(algo, data_test)
+    print("RMSE:\t\t{}".format(mse(data_test, test_pred_SVD)),
+          "MAE:\t\t{}".format(mae(data_test, test_pred_SVD)), sep='\n')
+
+
+
+
 
 
 

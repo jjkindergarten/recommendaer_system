@@ -26,10 +26,10 @@ def load_movielens_100k():
     data_test = data[split_index:].reset_index(drop=True)
 
     data_train = surprise.Dataset.load_from_df(data_train_db, reader=surprise.Reader('ml-100k')).build_full_trainset()
-    return data, data_train, data_test, data_train_db
+    return data, data_train, data_test
 
 # most popular item and most freq use user
-def load_popular_sub_data(data, n_user, n_item):
+def load_popular_sub_data(data, n_user, n_item, split = None):
     """
     
     :param data: 
@@ -46,10 +46,21 @@ def load_popular_sub_data(data, n_user, n_item):
     data = data[data.movie.isin(freq_item)].reset_index(drop=True)
 
     user_item_mat = pd.DataFrame(0, index=freq_user, columns=freq_item)
-    for i in range(len(data)):
-        user_item_mat.loc[data['user'][i], data['movie'][i]] = data['rating'][i]
+    if split != None:
+        rows = len(data)
+        data = data.iloc[np.random.permutation(rows)].reset_index(drop=True)
+        split_index = int(rows * split)
+        data_train = data[:split_index]
+        data_test = data[split_index:].reset_index(drop=True)
 
-    return user_item_mat, freq_user, freq_item
+        for i in range(len(data_train)):
+            user_item_mat.loc[data_train['user'][i], data_train['movie'][i]] = data['rating'][i]
+        return data, user_item_mat, data_train, data_test
+
+    else:
+        for i in range(len(data)):
+            user_item_mat.loc[data['user'][i], data['movie'][i]] = data['rating'][i]
+        return data, user_item_mat, freq_user, freq_item
 
 
 def data_split(data, corrupt_ratio = 0.1):
