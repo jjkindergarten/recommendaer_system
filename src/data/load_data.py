@@ -22,10 +22,10 @@ def load_movielens_100k():
     rows = len(data)
     data = data.iloc[np.random.permutation(rows)].reset_index(drop=True)
     split_index = int(rows * split_ratio)
-    data_train_db = data[:split_index]
+    data_train = data[:split_index]
     data_test = data[split_index:].reset_index(drop=True)
 
-    data_train = surprise.Dataset.load_from_df(data_train_db, reader=surprise.Reader('ml-100k')).build_full_trainset()
+    # data_train = surprise.Dataset.load_from_df(data_train_db, reader=surprise.Reader('ml-100k')).build_full_trainset()
     return data, data_train, data_test
 
 # most popular item and most freq use user

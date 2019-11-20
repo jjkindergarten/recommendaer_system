@@ -15,20 +15,22 @@ n_epochs = 1000
 learning_rate = 0.01
 
 # transfer the data into tf.format
-X = tf.constant(scaled_housing_data_plus_bias, dtype=tf.float32, name="X")
-y = tf.constant(housing.target.reshape(-1, 1), dtype=tf.float32, name="y")
+# X = tf.constant(scaled_housing_data_plus_bias, dtype=tf.float32, name="X")
+# y = tf.constant(housing.target.reshape(-1, 1), dtype=tf.float32, name="y")
+X = scaled_housing_data_plus_bias
+y = housing.target.reshape(-1, 1)
 
 # the part includes coef
 class Model(object):
     def __init__(self, x):
         self.W = tf.Variable(tf.random.normal((x.shape[1], 1)))
 
-    def __call__(self, x):
+    def model_(self, x):
         return x @ self.W
 
 # the loss function based on model
 def loss(model,inputs, targets):
-    error = model(inputs) - targets
+    error = model.model_(inputs) - targets
     return tf.reduce_mean(tf.square(error))
 
 # gradient tape
