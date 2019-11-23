@@ -8,7 +8,7 @@ from src.utilits.share import mse, mae
 from src.collaborative_filtering.SVD_surprise import *
 
 # Load the movielens-100k dataset (download it if needed).
-def load_movielens_100k():
+def load_movielens_100k(split_ratio = 0.75):
     data = pd.read_csv('data/MovieLens/ml-100k/u.data', sep = '\t', header=None, names = ['user', 'movie', 'rating', 'timestamp'])
     data = data.drop(['timestamp'], axis=1)
 
@@ -18,7 +18,7 @@ def load_movielens_100k():
         data[col] = data[col].astype(np.int32)
     data["rating"] = data["rating"].astype(np.float32)
 
-    split_ratio = 0.75
+
     rows = len(data)
     data = data.iloc[np.random.permutation(rows)].reset_index(drop=True)
     split_index = int(rows * split_ratio)
